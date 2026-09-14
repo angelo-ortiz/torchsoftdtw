@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from torch.autograd import Function
 
-from . import _C  # noqa: F401  # ty: ignore[unresolved-import]
-from .distances import pairwise_l2_squared
+from . import _C  # noqa: F401 # ty: ignore[unresolved-import]
+from .distances import PAIRWISE_DISTANCES
 
 
 def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
@@ -186,12 +186,30 @@ def soft_dtw(
 
 class SoftDTW(nn.Module):
     def __init__(
-        self, gamma: float = 1.0, bandwidth: int = -1, normalize: bool = False
+        self,
+        gamma: float = 1.0,
+        bandwidth: int = -1,
+        normalize: bool = False,
+        distance: str = "l2_squared",
     ):
+        """
+        Args:
+            gamma: Smoothing parameter (> 0).
+            bandwidth: Sakoe-Chiba bandwidth. -1 means no constraint.
+            normalize: Divide the cost by lengths_y (or Y's sequence length).
+            distance: Pairwise distance used to build the cost matrix from X, Y.
+                One of "l2_squared", "l1", "cosine".
+        """
         super().__init__()
+        if distance not in PAIRWISE_DISTANCES:
+            raise ValueError(
+                f"Unknown distance {distance!r}, expected one of "
+                f"{sorted(PAIRWISE_DISTANCES)}"
+            )
         self.gamma = gamma
         self.bandwidth = bandwidth
         self.normalize = normalize
+        self.distance = distance
 
     def forward(
         self,
@@ -218,7 +236,7 @@ class SoftDTW(nn.Module):
 
         B = X.size(0)
 
-        D = pairwise_l2_squared(X, Y)
+        D = PAIRWISE_DISTANCES[self.distance](X, Y)
         costs = soft_dtw(D, lengths_x, lengths_y, self.gamma, self.bandwidth)
 
         if not self.normalize:
