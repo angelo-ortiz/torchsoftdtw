@@ -37,8 +37,8 @@ namespace torchsoftdtw {
 
 namespace stbl = torch::stable;
 
-template <typename T, size_t N>
-using TensorAccessor = torch::headeronly::HeaderOnlyTensorAccessor<T, N>;
+using stbl::Tensor;
+template <typename T, size_t N> using TensorAccessor = torch::headeronly::HeaderOnlyTensorAccessor<T, N>;
 
 // accessor<T, N>(...) would need a comma in its explicit template-argument
 // list. That comma sits inside "<...>" rather than "(...)", which the
@@ -47,13 +47,13 @@ using TensorAccessor = torch::headeronly::HeaderOnlyTensorAccessor<T, N>;
 // macro's internal argument counting. Fixed-N, single-type-argument helpers
 // sidestep the issue entirely.
 template <typename T>
-inline TensorAccessor<T, 1> accessor1(stbl::Tensor t) {
+inline TensorAccessor<T, 1> accessor1(Tensor t) {
     return TensorAccessor<T, 1>(
         reinterpret_cast<T*>(t.data_ptr()), t.sizes().data(), t.strides().data());
 }
 
 template <typename T>
-inline TensorAccessor<T, 3> accessor3(stbl::Tensor t) {
+inline TensorAccessor<T, 3> accessor3(Tensor t) {
     return TensorAccessor<T, 3>(
         reinterpret_cast<T*>(t.data_ptr()), t.sizes().data(), t.strides().data());
 }
@@ -62,19 +62,32 @@ inline TensorAccessor<T, 3> accessor3(stbl::Tensor t) {
 // softdtw_forward_checks). Every kernel below only ever deals with int64_t
 // lengths, so normalize once, up front, instead of templating the CPU
 // dispatch and the CUDA kernels over a second integer type.
-inline stbl::Tensor lengths_to_int64(stbl::Tensor t) {
+inline Tensor lengths_to_int64(Tensor t) {
     if (t.scalar_type() == torch::headeronly::ScalarType::Long) return t;
     return stbl::to(t, torch::headeronly::ScalarType::Long);
 }
 
+using ScalarType = torch::headeronly::ScalarType;
+
+inline ScalarType acc_scalar_type(ScalarType st) {
+    if (st == ScalarType::Half || st == ScalarType::BFloat16) return ScalarType::Float;
+    return st;
+}
+
+inline Tensor promote_to_acc(Tensor t) {
+    auto target = acc_scalar_type(t.scalar_type());
+    if (t.scalar_type() == target) return t;
+    return stbl::to(t, target);
+}
+
 // Forward declarations of CUDA launchers (defined in cuda/softdtw.cu)
 #ifdef WITH_CUDA
-std::tuple<stbl::Tensor, stbl::Tensor> softdtw_cuda_forward(
-    stbl::Tensor D, stbl::Tensor lengths_x, stbl::Tensor lengths_y,
+std::tuple<Tensor, Tensor> softdtw_cuda_forward(
+    Tensor D, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth);
-stbl::Tensor softdtw_cuda_backward(
-    stbl::Tensor D, stbl::Tensor R, stbl::Tensor lengths_x,
-    stbl::Tensor lengths_y, double gamma, int64_t bandwidth);
+Tensor softdtw_cuda_backward(
+    Tensor D, Tensor R, Tensor lengths_x,
+    Tensor lengths_y, double gamma, int64_t bandwidth);
 #endif
 
 namespace {
@@ -89,36 +102,38 @@ scalar_t logsumexp3(scalar_t a, scalar_t b, scalar_t c) {
 }  // anonymous namespace
 
 
-std::tuple<stbl::Tensor, stbl::Tensor> softdtw_cpu_forward(
-    stbl::Tensor D,
-    stbl::Tensor lengths_x,
-    stbl::Tensor lengths_y,
+std::tuple<Tensor, Tensor> softdtw_cpu_forward(
+    Tensor D,
+    Tensor lengths_x,
+    Tensor lengths_y,
     double gamma,
     int64_t bandwidth)
 {
-    D = stbl::contiguous(D);
-    lengths_x = stbl::contiguous(lengths_to_int64(lengths_x));
-    lengths_y = stbl::contiguous(lengths_to_int64(lengths_y));
+    lengths_x = lengths_to_int64(lengths_x);
+    lengths_y = lengths_to_int64(lengths_y);
 
     const int64_t B = D.size(0);
     const int64_t N = D.size(1);
     const int64_t M = D.size(2);
 
+    auto D_compute = promote_to_acc(D);
+    auto acc_type = D_compute.scalar_type();
+
     auto R = stbl::full(
         {B, N + 2, M + 2}, std::numeric_limits<double>::infinity(),
-        D.scalar_type(), std::nullopt, D.device());
+        acc_type, std::nullopt, D.device());
     {
         auto R_row0 = stbl::select(R, 1, 0);
         auto R_00 = stbl::select(R_row0, 1, 0);
         stbl::fill_(R_00, 0.0);
     }
-    auto costs = stbl::empty({B}, D.scalar_type(), std::nullopt, D.device());
+    auto costs = stbl::new_empty(D, {B}, acc_type);
 
-    THO_DISPATCH_V2(D.scalar_type(), "softdtw_cpu_forward", ([&] {
+    THO_DISPATCH_V2(acc_type, "softdtw_cpu_forward", ([&] {
         scalar_t gamma_val = static_cast<scalar_t>(gamma);
         const scalar_t INF = std::numeric_limits<scalar_t>::infinity();
 
-        auto D_a = accessor3<const scalar_t>(D);
+        auto D_a = accessor3<const scalar_t>(D_compute);
         auto R_a = accessor3<scalar_t>(R);
         auto lx_a = accessor1<const int64_t>(lengths_x);
         auto ly_a = accessor1<const int64_t>(lengths_y);
@@ -166,37 +181,39 @@ std::tuple<stbl::Tensor, stbl::Tensor> softdtw_cpu_forward(
 }
 
 
-stbl::Tensor softdtw_cpu_backward(
-    stbl::Tensor D,
-    stbl::Tensor R,
-    stbl::Tensor lengths_x,
-    stbl::Tensor lengths_y,
+Tensor softdtw_cpu_backward(
+    Tensor D,
+    Tensor R,
+    Tensor lengths_x,
+    Tensor lengths_y,
     double gamma,
     int64_t bandwidth)
 {
-    D = stbl::contiguous(D);
-    R = stbl::contiguous(R);
-    lengths_x = stbl::contiguous(lengths_to_int64(lengths_x));
-    lengths_y = stbl::contiguous(lengths_to_int64(lengths_y));
+    auto input_type = D.scalar_type();
+    lengths_x = lengths_to_int64(lengths_x);
+    lengths_y = lengths_to_int64(lengths_y);
 
     const int64_t B = D.size(0);
     const int64_t N = D.size(1);
     const int64_t M = D.size(2);
 
-    // Set up R boundary for backward
+    auto D_compute = promote_to_acc(D);
+    auto acc_type = D_compute.scalar_type();
+
+    // Set up R boundary for backward (R is already in acc_type from forward)
     auto R_bw = stbl::clone(R);
 
     // logE initialized to -inf
     auto E = stbl::full(
         {B, N + 2, M + 2}, -std::numeric_limits<double>::infinity(),
-        D.scalar_type(), std::nullopt, D.device());
+        acc_type, std::nullopt, D.device());
 
-    THO_DISPATCH_V2(D.scalar_type(), "softdtw_cpu_backward", ([&] {
+    THO_DISPATCH_V2(acc_type, "softdtw_cpu_backward", ([&] {
         scalar_t gamma_val = static_cast<scalar_t>(gamma);
         const scalar_t INF = std::numeric_limits<scalar_t>::infinity();
         const scalar_t NINF = -INF;
 
-        auto D_a = accessor3<const scalar_t>(D);
+        auto D_a = accessor3<const scalar_t>(D_compute);
         auto R_bw_a = accessor3<scalar_t>(R_bw);
         auto R_a = accessor3<const scalar_t>(R);
         auto E_a = accessor3<scalar_t>(E);
@@ -268,8 +285,11 @@ stbl::Tensor softdtw_cpu_backward(
     }), AT_EXPAND(AT_FLOATING_TYPES));
 
     auto E_n1 = stbl::narrow(E, 1, 1, N);
-    auto E_n = stbl::narrow(E_n1, 2, 1, M);
-    return stbl::contiguous(E_n);
+    auto E_out = stbl::narrow(E_n1, 2, 1, M);
+    if (E_out.scalar_type() != input_type) {
+        E_out = stbl::to(E_out, input_type);
+    }
+    return E_out;
 }
 
 
@@ -287,8 +307,8 @@ stbl::Tensor softdtw_cpu_backward(
 namespace {
 
 void softdtw_forward_checks(
-    const stbl::Tensor& D, const stbl::Tensor& lengths_x,
-    const stbl::Tensor& lengths_y, double gamma)
+    const Tensor& D, const Tensor& lengths_x,
+    const Tensor& lengths_y, double gamma)
 {
     STD_TORCH_CHECK(D.dim() == 3, "D must be 3D (B, N, M)");
     STD_TORCH_CHECK(lengths_x.dim() == 1 && lengths_y.dim() == 1, "lengths must be 1D");
@@ -296,39 +316,46 @@ void softdtw_forward_checks(
                 "Batch size mismatch");
     STD_TORCH_CHECK(gamma > 0, "gamma must be positive");
 
-    auto is_int32_or_int64 = [](torch::headeronly::ScalarType t) {
-        return t == torch::headeronly::ScalarType::Int || t == torch::headeronly::ScalarType::Long;
+    auto is_float_type = [](ScalarType t) {
+        return t == ScalarType::Float || t == ScalarType::Double
+            || t == ScalarType::Half || t == ScalarType::BFloat16;
+    };
+    STD_TORCH_CHECK(is_float_type(D.scalar_type()),
+                "D must be float16, bfloat16, float32 or float64");
+
+    auto is_int32_or_int64 = [](ScalarType t) {
+        return t == ScalarType::Int || t == ScalarType::Long;
     };
     STD_TORCH_CHECK(is_int32_or_int64(lengths_x.scalar_type()), "lengths_x must be int32 or int64");
     STD_TORCH_CHECK(is_int32_or_int64(lengths_y.scalar_type()), "lengths_y must be int32 or int64");
 }
 
-std::tuple<stbl::Tensor, stbl::Tensor> softdtw_cpu_forward_op(
-    stbl::Tensor D, stbl::Tensor lengths_x, stbl::Tensor lengths_y,
+std::tuple<Tensor, Tensor> softdtw_cpu_forward_op(
+    Tensor D, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
 {
     softdtw_forward_checks(D, lengths_x, lengths_y, gamma);
     return softdtw_cpu_forward(D, lengths_x, lengths_y, gamma, bandwidth);
 }
 
-stbl::Tensor softdtw_cpu_backward_op(
-    stbl::Tensor D, stbl::Tensor R, stbl::Tensor lengths_x, stbl::Tensor lengths_y,
+Tensor softdtw_cpu_backward_op(
+    Tensor D, Tensor R, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
 {
     return softdtw_cpu_backward(D, R, lengths_x, lengths_y, gamma, bandwidth);
 }
 
 #ifdef WITH_CUDA
-std::tuple<stbl::Tensor, stbl::Tensor> softdtw_cuda_forward_op(
-    stbl::Tensor D, stbl::Tensor lengths_x, stbl::Tensor lengths_y,
+std::tuple<Tensor, Tensor> softdtw_cuda_forward_op(
+    Tensor D, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
 {
     softdtw_forward_checks(D, lengths_x, lengths_y, gamma);
     return softdtw_cuda_forward(D, lengths_x, lengths_y, gamma, bandwidth);
 }
 
-stbl::Tensor softdtw_cuda_backward_op(
-    stbl::Tensor D, stbl::Tensor R, stbl::Tensor lengths_x, stbl::Tensor lengths_y,
+Tensor softdtw_cuda_backward_op(
+    Tensor D, Tensor R, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
 {
     return softdtw_cuda_backward(D, R, lengths_x, lengths_y, gamma, bandwidth);

@@ -1,9 +1,36 @@
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.autograd import Function
 
-from . import _C  # noqa: F401  (loads the extension, registering torch.ops.torchsoftdtw.*)
+from . import _C  # noqa: F401  # ty: ignore[unresolved-import]
 from .distances import pairwise_l2_squared
+
+
+def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
+    if dtype in (torch.float16, torch.bfloat16):
+        return torch.float32
+    return dtype
+
+
+# ---- FakeTensor kernels for torch.compile ----
+
+
+@torch.library.register_fake("torchsoftdtw::forward")
+def _forward_fake(D, lengths_x, lengths_y, gamma, bandwidth):
+    B, N, M = D.shape
+    acc_dt = _acc_dtype(D.dtype)
+    costs = D.new_empty((B,), dtype=acc_dt)
+    R = D.new_empty((B, N + 2, M + 2), dtype=acc_dt)
+    return costs, R
+
+
+@torch.library.register_fake("torchsoftdtw::backward")
+def _backward_fake(D, R, lengths_x, lengths_y, gamma, bandwidth):
+    B, N, M = D.shape
+    return D.new_empty((B, N, M))
+
+
+# ---- Reference implementations (for testing) ----
 
 
 def _naive_forward(D, lengths_x, lengths_y, gamma, bandwidth):
@@ -105,19 +132,28 @@ def _naive_backward(D, R, lengths_x, lengths_y, gamma, bandwidth):
     return E
 
 
+# ---- Autograd Function ----
+
+
 class SoftDTWAutograd(Function):
     @staticmethod
+    @torch.amp.custom_fwd(device_type="cuda")
     def forward(ctx, D, lengths_x, lengths_y, gamma, bandwidth):
-        costs, R = torch.ops.torchsoftdtw.forward(D, lengths_x, lengths_y, gamma, bandwidth)
+        costs, R = torch.ops.torchsoftdtw.forward(
+            D, lengths_x, lengths_y, gamma, bandwidth
+        )
         ctx.save_for_backward(D, R, lengths_x, lengths_y)
         ctx.gamma = gamma
         ctx.bandwidth = bandwidth
         return costs
 
     @staticmethod
+    @torch.amp.custom_bwd(device_type="cuda")
     def backward(ctx, grad_output):
         D, R, lengths_x, lengths_y = ctx.saved_tensors
-        E = torch.ops.torchsoftdtw.backward(D, R, lengths_x, lengths_y, ctx.gamma, ctx.bandwidth)
+        E = torch.ops.torchsoftdtw.backward(
+            D, R, lengths_x, lengths_y, ctx.gamma, ctx.bandwidth
+        )
         return grad_output.unsqueeze(-1).unsqueeze(-1) * E, None, None, None, None
 
 
@@ -182,28 +218,13 @@ class SoftDTW(nn.Module):
 
         B = X.size(0)
 
+        D = pairwise_l2_squared(X, Y)
+        costs = soft_dtw(D, lengths_x, lengths_y, self.gamma, self.bandwidth)
+
         if not self.normalize:
-            D = pairwise_l2_squared(X, Y)
-            return soft_dtw(D, lengths_x, lengths_y, self.gamma, self.bandwidth)
+            return costs
 
-        # Normalized: sdtw(X,Y) - 0.5*(sdtw(X,X) + sdtw(Y,Y))
-        # Concatenate into one batch of 3B for efficiency
-        X_cat = torch.cat([X, X, Y], dim=0)  # (3B, max_N_or_M, D)
-        Y_cat = torch.cat([Y, X, Y], dim=0)
-
-        if lengths_x is None:
-            lengths_x = torch.full((B,), X.size(1), dtype=torch.long, device=X.device)
         if lengths_y is None:
-            lengths_y = torch.full((B,), Y.size(1), dtype=torch.long, device=X.device)
+            lengths_y = torch.full((B,), Y.size(1), dtype=torch.long, device=Y.device)
 
-        lx_cat = torch.cat([lengths_x, lengths_x, lengths_y], dim=0)
-        ly_cat = torch.cat([lengths_y, lengths_x, lengths_y], dim=0)
-
-        D_cat = pairwise_l2_squared(X_cat, Y_cat)
-        costs_cat = soft_dtw(D_cat, lx_cat, ly_cat, self.gamma, self.bandwidth)
-
-        sdtw_xy = costs_cat[:B]
-        sdtw_xx = costs_cat[B : 2 * B]
-        sdtw_yy = costs_cat[2 * B :]
-
-        return sdtw_xy - 0.5 * (sdtw_xx + sdtw_yy)
+        return costs / lengths_y.to(costs.dtype)

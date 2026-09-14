@@ -158,10 +158,10 @@ class TestPadding:
         grad = D.grad
 
         # Gradient should be zero in the padded region
-        assert (grad[0, 4:, :] == 0).all()
-        assert (grad[0, :, 5:] == 0).all()
+        assert (grad[0, 4:, :] == 0).all()  # ty: ignore[not-subscriptable]
+        assert (grad[0, :, 5:] == 0).all()  # ty: ignore[not-subscriptable]
         # But non-zero in the valid region
-        assert (grad[0, :4, :5] != 0).any()
+        assert (grad[0, :4, :5] != 0).any()  # ty: ignore[not-subscriptable]
 
 
 class TestBandwidth:
@@ -248,11 +248,16 @@ class TestModule:
     def test_normalize(self):
         torch.manual_seed(9)
         X = torch.randn(2, 5, 4, dtype=torch.float64)
+        Y = torch.randn(2, 5, 4, dtype=torch.float64)
+        lengths_y = torch.tensor([5, 3])
 
-        sdtw = SoftDTW(gamma=1.0, normalize=True)
-        costs = sdtw(X, X)
-        # Self-distance after normalization should be ~0
-        assert costs.abs().max().item() < 1e-6
+        sdtw = SoftDTW(gamma=1.0, normalize=False)
+        raw_costs = sdtw(X, Y, lengths_y=lengths_y)
+
+        sdtw_norm = SoftDTW(gamma=1.0, normalize=True)
+        norm_costs = sdtw_norm(X, Y, lengths_y=lengths_y)
+
+        assert torch.allclose(norm_costs, raw_costs / lengths_y.to(raw_costs.dtype))
 
     def test_unbatched_input(self):
         torch.manual_seed(10)

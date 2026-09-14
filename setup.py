@@ -13,7 +13,11 @@ sources = [os.path.join(csrc_dir, "softdtw.cpp")]
 # extension keeps working against newer libtorch releases without a rebuild.
 TORCH_TARGET_VERSION = "0x0210000000000000ULL"
 extra_compile_args = {
-    "cxx": [f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}"],
+    "cxx": [
+        f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}",
+        "-DTORCH_STABLE_ONLY",
+        "-Werror",
+    ],
     "nvcc": [f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}"],
 }
 
