@@ -132,9 +132,6 @@ def _naive_backward(D, R, lengths_x, lengths_y, gamma, bandwidth):
     return E
 
 
-# ---- Autograd Function ----
-
-
 class SoftDTWAutograd(Function):
     @staticmethod
     @torch.amp.custom_fwd(device_type="cuda")
