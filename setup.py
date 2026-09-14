@@ -1,64 +1,63 @@
 import os
+import sys
 
-from setuptools import find_packages, setup
-from torch.utils.cpp_extension import BuildExtension, CppExtension
+from setuptools import Extension, find_packages, setup
+from torch.utils.cpp_extension import (
+    CUDA_HOME,
+    BuildExtension,
+    CppExtension,
+    CUDAExtension,
+)
 
-ext_modules = []
 
-csrc_dir = os.path.join("src", "torchsoftdtw", "csrc")
-sources = [os.path.join(csrc_dir, "softdtw.cpp")]
+class CUDAArchListError(RuntimeError):
+    """To raise if CUDA is found and TORCH_CUDA_ARCH_LIST is not set."""
 
-# Target PyTorch's libtorch stable ABI (torch/csrc/stable) at the minimum
-# version required by this package (see pyproject.toml), so the compiled
-# extension keeps working against newer libtorch releases without a rebuild.
-TORCH_TARGET_VERSION = "0x0210000000000000ULL"
-extra_compile_args = {
-    "cxx": [
-        f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}",
-        "-DTORCH_STABLE_ONLY",
-        "-Werror",
-    ],
-    "nvcc": [f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}"],
-}
-
-cuda_available = False
-try:
-    import torch
-
-    if torch.cuda.is_available() or os.environ.get("FORCE_CUDA", "0") == "1":
-        from torch.utils.cpp_extension import CUDAExtension
-
-        cuda_source = os.path.join(csrc_dir, "cuda", "softdtw.cu")
-        if os.path.exists(cuda_source):
-            sources.append(cuda_source)
-            ext_modules.append(
-                CUDAExtension(
-                    name="torchsoftdtw._C",
-                    sources=sources,
-                    define_macros=[("WITH_CUDA", None)],
-                    extra_compile_args=extra_compile_args,
-                    py_limited_api=True,
-                )
-            )
-            cuda_available = True
-except Exception:
-    pass
-
-if not cuda_available:
-    ext_modules.append(
-        CppExtension(
-            name="torchsoftdtw._C",
-            sources=sources,
-            extra_compile_args=extra_compile_args,
-            py_limited_api=True,
+    def __init__(self) -> None:
+        super().__init__(
+            "You must explicitly set TORCH_CUDA_ARCH_LIST to build from source if CUDA is found.\n"
+            "Check you supported gpu architectures beforehand.\n"
+            "For example: TORCH_CUDA_ARCH_LIST='7.0;7.5;8.0;8.6;9.0;10.0;12.0+PTX'"
         )
+
+
+def get_extension() -> Extension:
+    """Either CUDA or CPU extension."""
+    use_cuda = CUDA_HOME is not None and sys.platform != "win32"
+    if use_cuda and "TORCH_CUDA_ARCH_LIST" not in os.environ:
+        raise CUDAArchListError
+    sources = ["src/torchsoftdtw/csrc/softdtw.cpp"] + (
+        ["src/torchsoftdtw/csrc/cuda/softdtw.cu"] if use_cuda else []
     )
+    TORCH_TARGET_VERSION = "0x020A000000000000"
+    extra_compile_args = {
+        "cxx": [
+            f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}",
+            "-DTORCH_STABLE_ONLY",
+            "-Werror",
+        ],
+        "nvcc": [f"-DTORCH_TARGET_VERSION={TORCH_TARGET_VERSION}"],
+    }
+    extension = (CUDAExtension if use_cuda else CppExtension)(
+        "torchsoftdtw._C",
+        sources,
+        extra_compile_args=extra_compile_args,
+        py_limited_api=True,
+    )
+    if use_cuda:
+        # Remove cudart so it does not appear in the .so's dependencies.
+        # Cudart symbols are resolved at runtime from the cudart already loaded by PyTorch,
+        # making the wheel compatible across CUDA major versions.
+        extension.libraries = [
+            lib for lib in extension.libraries if "cudart" not in lib
+        ]
+    return extension
+
 
 setup(
     name="torchsoftdtw",
     version="0.1.0",
-    package_dir={"": "src"},
-    packages=find_packages(where="src"),
-    ext_modules=ext_modules,
+    ext_modules=[get_extension()],
     cmdclass={"build_ext": BuildExtension},
+    options={"bdist_wheel": {"py_limited_api": "cp312"}},
 )

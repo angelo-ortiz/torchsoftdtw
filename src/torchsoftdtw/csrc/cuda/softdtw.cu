@@ -693,4 +693,10 @@ Tensor softdtw_cuda_backward(
     return E_out;
 }
 
+STABLE_TORCH_LIBRARY_IMPL(torchsoftdtw, CUDA, m) {
+    m.impl("forward", TORCH_BOX(&softdtw_cuda_forward_op));
+    m.impl("backward", TORCH_BOX(&softdtw_cuda_backward_op));
+}
+
+
 }  // namespace torchsoftdtw
