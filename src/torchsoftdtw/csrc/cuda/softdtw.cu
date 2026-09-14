@@ -10,6 +10,7 @@
 #include <torch/headeronly/core/Dispatch_v2.h>
 #include <torch/headeronly/core/ScalarType.h>
 #include <torch/headeronly/util/Exception.h>
+#include <torch/headeronly/core/TensorAccessor.h>
 
 // Not part of the public stable ABI surface, but the only way (pre PyTorch 2.13's
 // Stream::nativeHandle()) to get the raw cudaStream_t backing the current stream,
