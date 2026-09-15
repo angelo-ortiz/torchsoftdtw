@@ -65,6 +65,67 @@ inline int round_to_warp(int n) {
 namespace {
 
 template <typename scalar_t>
+__global__ void set_backward_sentinels_kernel(
+    scalar_t* __restrict__ R_bw,
+    const scalar_t* __restrict__ R_orig,
+    scalar_t* __restrict__ E,
+    const int64_t* __restrict__ lengths_x,
+    const int64_t* __restrict__ lengths_y,
+    int N, int M, int B)
+{
+    const int b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B) return;
+    const int R_M = M + 2;
+    const int R_size = (N + 2) * R_M;
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
+    R_bw[b * R_size + (nx + 1) * R_M + (ny + 1)] = R_orig[b * R_size + nx * R_M + ny];
+    E[b * R_size + (nx + 1) * R_M + (ny + 1)] = scalar_t(0);
+}
+
+template <typename scalar_t>
+__global__ void extract_costs_kernel(
+    const scalar_t* __restrict__ R,
+    scalar_t* __restrict__ costs,
+    const int64_t* __restrict__ lengths_x,
+    const int64_t* __restrict__ lengths_y,
+    int N, int M, int B)
+{
+    const int b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B) return;
+    const int R_M = M + 2;
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
+    costs[b] = R[b * (N + 2) * R_M + nx * R_M + ny];
+}
+
+template <typename scalar_t>
+__global__ void exponentiate_and_zero_kernel(
+    scalar_t* __restrict__ E,
+    const int64_t* __restrict__ lengths_x,
+    const int64_t* __restrict__ lengths_y,
+    int N, int M)
+{
+    const int b = blockIdx.y;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int R_M = M + 2;
+    const int R_size = (N + 2) * R_M;
+    if (idx >= R_size) return;
+
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
+    const int row = idx / R_M;
+    const int col = idx % R_M;
+
+    scalar_t* E_b = E + b * R_size;
+    if (row >= 1 && row <= nx && col >= 1 && col <= ny) {
+        E_b[idx] = exp(E_b[idx]);
+    } else {
+        E_b[idx] = 0;
+    }
+}
+
+template <typename scalar_t>
 __device__ __forceinline__ scalar_t logsumexp3(scalar_t a, scalar_t b, scalar_t c) {
     scalar_t m = fmax(fmax(a, b), c);
     if (isinf(m) && m < 0) return m;
@@ -94,15 +155,7 @@ __global__ void softdtw_forward_kernel(
 
     const scalar_t INF = INFINITY;
 
-    // Initialize R to +inf, R[0][0] = 0
-    for (int idx = tid; idx < (N + 2) * R_M; idx += blockDim.x) {
-        R_b[idx] = INF;
-    }
-    __syncthreads();
-    if (tid == 0) {
-        R_b[0] = 0;
-    }
-    __syncthreads();
+    // R is already initialized to +inf with R[b][0][0] = 0 by the host.
 
     // Shared memory: 3 rotating buffers for R anti-diagonal values.
     // Each buffer has (blockDim.x + 1) elements: index -1 is the boundary slot.
@@ -132,7 +185,6 @@ __global__ void softdtw_forward_kernel(
         // Reset curr buffer
         curr[tid] = INF;
         if (tid == 0) curr[-1] = INF;
-        __syncthreads();
 
         const int i = tid;
         const int j = p - tid;
@@ -289,7 +341,6 @@ __global__ void softdtw_backward_kernel(
         // Reset curr buffer
         curr[tid] = NEG_INF;
         if (tid == 0) curr[blockDim.x] = NEG_INF;
-        __syncthreads();
 
         const int i = tid;
         const int j = p - tid;
@@ -329,7 +380,6 @@ __global__ void softdtw_backward_kernel(
     }
 
     // Exponentiate logE -> E for valid region, zero out the rest
-    __syncthreads();
     for (int idx = tid; idx < R_size; idx += blockDim.x) {
         int row = idx / R_M;
         int col = idx % R_M;
@@ -443,7 +493,6 @@ std::tuple<Tensor, Tensor> softdtw_cuda_forward(
     auto costs = stbl::new_empty(D, {B}, acc_type);
 
     const int max_len = std::max(N, M);
-    const stbl::Device cpu_device(stbl::DeviceType::CPU);
 
     stbl::accelerator::DeviceIndex device_idx = stbl::accelerator::getCurrentDeviceIndex();
     void* stream_ptr = nullptr;
@@ -478,20 +527,12 @@ std::tuple<Tensor, Tensor> softdtw_cuda_forward(
                     lengths_y.const_data_ptr<int64_t>(),
                     N, M, B, gamma_val, bandwidth_i, p);
             }
-            // Extract costs on CPU
-            auto R_cpu = stbl::to(R, cpu_device);
-            auto lx_cpu = stbl::to(lengths_x, cpu_device);
-            auto ly_cpu = stbl::to(lengths_y, cpu_device);
-            auto costs_cpu = stbl::empty({B}, acc_type, std::nullopt, cpu_device);
-
-            auto R_a = accessor3<const scalar_t>(R_cpu);
-            auto lx_a = accessor1<const int64_t>(lx_cpu);
-            auto ly_a = accessor1<const int64_t>(ly_cpu);
-            auto c_a = accessor1<scalar_t>(costs_cpu);
-            for (int64_t b = 0; b < B; b++) {
-                c_a[b] = R_a[b][lx_a[b]][ly_a[b]];
-            }
-            costs = stbl::to(costs_cpu, D.device());
+            extract_costs_kernel<scalar_t><<<(B + 255) / 256, std::min(256, B), 0, stream>>>(
+                R.const_data_ptr<scalar_t>(),
+                costs.mutable_data_ptr<scalar_t>(),
+                lengths_x.const_data_ptr<int64_t>(),
+                lengths_y.const_data_ptr<int64_t>(),
+                N, M, B);
         }
     }), AT_EXPAND(AT_FLOATING_TYPES));
 
@@ -520,7 +561,6 @@ Tensor softdtw_cuda_backward(
     const int N = static_cast<int>(D.size(1));
     const int M = static_cast<int>(D.size(2));
     const int bandwidth_i = static_cast<int>(bandwidth);
-    const stbl::Device cpu_device(stbl::DeviceType::CPU);
 
     // R_bw with sentinel: R_bw[b, nx+1, ny+1] = R[b, nx, ny]
     auto R_bw = stbl::clone(R);
@@ -530,37 +570,22 @@ Tensor softdtw_cuda_backward(
         {B, N + 2, M + 2}, -static_cast<double>(INFINITY),
         acc_type, std::nullopt, D.device());
 
-    {
-        auto R_bw_cpu = stbl::to(R_bw, cpu_device);
-        auto R_orig_cpu = stbl::to(R, cpu_device);
-        auto E_cpu = stbl::to(E, cpu_device);
-        auto lx_cpu = stbl::to(lengths_x, cpu_device);
-        auto ly_cpu = stbl::to(lengths_y, cpu_device);
-
-        THO_DISPATCH_V2(acc_type, "softdtw_backward_init", ([&] {
-            auto R_bw_a = accessor3<scalar_t>(R_bw_cpu);
-            auto R_orig_a = accessor3<const scalar_t>(R_orig_cpu);
-            auto E_a = accessor3<scalar_t>(E_cpu);
-            auto lx_a = accessor1<const int64_t>(lx_cpu);
-            auto ly_a = accessor1<const int64_t>(ly_cpu);
-            for (int64_t b = 0; b < B; b++) {
-                const int64_t nx = lx_a[b];
-                const int64_t ny = ly_a[b];
-                R_bw_a[b][nx + 1][ny + 1] = R_orig_a[b][nx][ny];
-                E_a[b][nx + 1][ny + 1] = 0;
-            }
-        }), AT_EXPAND(AT_FLOATING_TYPES));
-
-        R_bw = stbl::to(R_bw_cpu, D.device());
-        E = stbl::to(E_cpu, D.device());
-    }
-
     const int max_len = std::max(N, M);
 
     stbl::accelerator::DeviceIndex device_idx = stbl::accelerator::getCurrentDeviceIndex();
     void* stream_ptr = nullptr;
     TORCH_ERROR_CODE_CHECK(aoti_torch_get_current_cuda_stream(device_idx, &stream_ptr));
     cudaStream_t stream = static_cast<cudaStream_t>(stream_ptr);
+
+    THO_DISPATCH_V2(acc_type, "softdtw_backward_sentinel", ([&] {
+        set_backward_sentinels_kernel<scalar_t><<<(B + 255) / 256, std::min(256, B), 0, stream>>>(
+            R_bw.mutable_data_ptr<scalar_t>(),
+            R.const_data_ptr<scalar_t>(),
+            E.mutable_data_ptr<scalar_t>(),
+            lengths_x.const_data_ptr<int64_t>(),
+            lengths_y.const_data_ptr<int64_t>(),
+            N, M, B);
+    }), AT_EXPAND(AT_FLOATING_TYPES));
 
     THO_DISPATCH_V2(acc_type, "softdtw_cuda_backward", ([&] {
         scalar_t gamma_val = static_cast<scalar_t>(gamma);
@@ -593,30 +618,17 @@ Tensor softdtw_cuda_backward(
             }
 
             // Exponentiate logE -> E for valid region, zero out the rest
-            auto E_cpu = stbl::to(E, cpu_device);
-            auto lx_cpu = stbl::to(lengths_x, cpu_device);
-            auto ly_cpu = stbl::to(lengths_y, cpu_device);
-
-            auto E_a = accessor3<scalar_t>(E_cpu);
-            auto lx_a = accessor1<const int64_t>(lx_cpu);
-            auto ly_a = accessor1<const int64_t>(ly_cpu);
-            for (int64_t b = 0; b < B; b++) {
-                const int64_t nx = lx_a[b];
-                const int64_t ny = ly_a[b];
-                for (int64_t i = 1; i <= nx; i++) {
-                    for (int64_t j = 1; j <= ny; j++) {
-                        E_a[b][i][j] = std::exp(E_a[b][i][j]);
-                    }
-                }
-                for (int64_t i = 0; i < N + 2; i++) {
-                    for (int64_t j = 0; j < M + 2; j++) {
-                        if (i < 1 || i > nx || j < 1 || j > ny) {
-                            E_a[b][i][j] = 0;
-                        }
-                    }
-                }
+            {
+                const int R_size = (N + 2) * (M + 2);
+                int tpb_exp = 256;
+                int blocks_exp = (R_size + tpb_exp - 1) / tpb_exp;
+                dim3 grid_exp(blocks_exp, B);
+                exponentiate_and_zero_kernel<scalar_t><<<grid_exp, tpb_exp, 0, stream>>>(
+                    E.mutable_data_ptr<scalar_t>(),
+                    lengths_x.const_data_ptr<int64_t>(),
+                    lengths_y.const_data_ptr<int64_t>(),
+                    N, M);
             }
-            E = stbl::to(E_cpu, D.device());
         }
     }), AT_EXPAND(AT_FLOATING_TYPES));
 

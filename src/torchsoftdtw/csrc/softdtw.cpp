@@ -349,6 +349,13 @@ STABLE_TORCH_LIBRARY_IMPL(torchsoftdtw, CPU, m) {
 
 // Forward declarations of CUDA launchers (defined in cuda/softdtw.cu)
 #ifdef WITH_CUDA
+std::tuple<Tensor, Tensor> softdtw_cuda_forward(
+    Tensor D, Tensor lengths_x, Tensor lengths_y,
+    double gamma, int64_t bandwidth);
+Tensor softdtw_cuda_backward(
+    Tensor D, Tensor R, Tensor lengths_x,
+    Tensor lengths_y, double gamma, int64_t bandwidth);
+
 std::tuple<Tensor, Tensor> softdtw_cuda_forward_op(
     Tensor D, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
@@ -356,7 +363,6 @@ std::tuple<Tensor, Tensor> softdtw_cuda_forward_op(
     softdtw_forward_checks(D, lengths_x, lengths_y, gamma);
     return softdtw_cuda_forward(D, lengths_x, lengths_y, gamma, bandwidth);
 }
-
 Tensor softdtw_cuda_backward_op(
     Tensor D, Tensor R, Tensor lengths_x, Tensor lengths_y,
     double gamma, int64_t bandwidth)
