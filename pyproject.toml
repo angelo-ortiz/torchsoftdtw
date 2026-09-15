@@ -23,7 +23,6 @@ benchmark = [
 [tool.uv.sources]
 softdtw-cuda-torch = { git = "https://github.com/BGU-CS-VIL/sdtw-cuda-torch.git" }
 
-
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-wrap-aliases = true

@@ -41,6 +41,7 @@ def get_extension() -> Extension:
     extension = (CUDAExtension if use_cuda else CppExtension)(
         "torchsoftdtw._C",
         sources,
+        define_macros=[("WITH_CUDA", None)] if use_cuda else [],
         extra_compile_args=extra_compile_args,
         py_limited_api=True,
     )

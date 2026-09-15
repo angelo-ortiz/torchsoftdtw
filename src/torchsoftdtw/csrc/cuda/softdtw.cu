@@ -5,7 +5,6 @@
 #include <optional>
 #include <tuple>
 #include <torch/csrc/stable/accelerator.h>
-#include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/ops.h>
 #include <torch/csrc/stable/tensor.h>
 #include <torch/headeronly/core/Dispatch_v2.h>
@@ -86,8 +85,8 @@ __global__ void softdtw_forward_kernel(
 {
     const int b = blockIdx.x;
     const int tid = threadIdx.x;
-    const int nx = static_cast<int>(lengths_x(b));
-    const int ny = static_cast<int>(lengths_y(b));
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
     const int R_M = M + 2;
 
     scalar_t* R_b = R + b * (N + 2) * R_M;
@@ -192,8 +191,9 @@ __global__ void softdtw_forward_tiled_kernel(
 
     if (b >= B) return;
 
-    const int nx = static_cast<int>(lengths_x(b));
-    const int ny = static_cast<int>(lengths_y(b));
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
+    const int R_M = M + 2;
 
     const int i_lo = max(0, p - M + 1);
     const int i = i_lo + tid;
@@ -238,8 +238,8 @@ __global__ void softdtw_backward_kernel(
 {
     const int b = blockIdx.x;
     const int tid = threadIdx.x;
-    const int nx = static_cast<int>(lengths_x(b));
-    const int ny = static_cast<int>(lengths_y(b));
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
     const int R_M = M + 2;
     const int R_size = (N + 2) * R_M;
 
@@ -362,8 +362,9 @@ __global__ void softdtw_backward_tiled_kernel(
 
     if (b >= B) return;
 
-    const int nx = static_cast<int>(lengths_x(b));
-    const int ny = static_cast<int>(lengths_y(b));
+    const int nx = static_cast<int>(lengths_x[b]);
+    const int ny = static_cast<int>(lengths_y[b]);
+    const int R_M = M + 2;
 
     const int i_lo = max(0, p - M + 1);
     const int i = i_lo + tid;
@@ -374,6 +375,10 @@ __global__ void softdtw_backward_tiled_kernel(
 
     const scalar_t NEG_INF = -INFINITY;
     const scalar_t INF = INFINITY;
+
+    const scalar_t* D_b = D + b * N * M;
+    const scalar_t* R_b = R + b * (N + 2) * R_M;
+    scalar_t* E_b = E + b * (N + 2) * R_M;
 
     const int ri = i + 1;
     const int rj = j + 1;
@@ -452,7 +457,7 @@ std::tuple<Tensor, Tensor> softdtw_cuda_forward(
             int threads = round_to_warp(std::min(1024, max_len));
             size_t smem_bytes = 3 * (threads + 1) * sizeof(scalar_t);
             softdtw_forward_kernel<scalar_t><<<B, threads, smem_bytes, stream>>>(
-                D.const_data_ptr<scalar_t>(),
+                D_compute.const_data_ptr<scalar_t>(),
                 R.mutable_data_ptr<scalar_t>(),
                 costs.mutable_data_ptr<scalar_t>(),
                 lengths_x.const_data_ptr<int64_t>(),
@@ -467,7 +472,7 @@ std::tuple<Tensor, Tensor> softdtw_cuda_forward(
                 int blocks_x = (max_threads + tpb - 1) / tpb;
                 dim3 grid(blocks_x, B);
                 softdtw_forward_tiled_kernel<scalar_t><<<grid, tpb, 0, stream>>>(
-                    D.const_data_ptr<scalar_t>(),
+                    D_compute.const_data_ptr<scalar_t>(),
                     R.mutable_data_ptr<scalar_t>(),
                     lengths_x.const_data_ptr<int64_t>(),
                     lengths_y.const_data_ptr<int64_t>(),
@@ -564,7 +569,7 @@ Tensor softdtw_cuda_backward(
             int threads = round_to_warp(std::min(1024, max_len));
             size_t smem_bytes = 3 * (threads + 1) * sizeof(scalar_t);
             softdtw_backward_kernel<scalar_t><<<B, threads, smem_bytes, stream>>>(
-                D.const_data_ptr<scalar_t>(),
+                D_compute.const_data_ptr<scalar_t>(),
                 R_bw.const_data_ptr<scalar_t>(),
                 E.mutable_data_ptr<scalar_t>(),
                 lengths_x.const_data_ptr<int64_t>(),
@@ -579,7 +584,7 @@ Tensor softdtw_cuda_backward(
                 int blocks_x = (max_threads + tpb - 1) / tpb;
                 dim3 grid(blocks_x, B);
                 softdtw_backward_tiled_kernel<scalar_t><<<grid, tpb, 0, stream>>>(
-                    D.const_data_ptr<scalar_t>(),
+                    D_compute.const_data_ptr<scalar_t>(),
                     R_bw.const_data_ptr<scalar_t>(),
                     E.mutable_data_ptr<scalar_t>(),
                     lengths_x.const_data_ptr<int64_t>(),
@@ -623,11 +628,5 @@ Tensor softdtw_cuda_backward(
     }
     return E_out;
 }
-
-STABLE_TORCH_LIBRARY_IMPL(torchsoftdtw, CUDA, m) {
-    m.impl("forward", TORCH_BOX(&softdtw_cuda_forward_op));
-    m.impl("backward", TORCH_BOX(&softdtw_cuda_backward_op));
-}
-
 
 }  // namespace torchsoftdtw

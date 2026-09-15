@@ -337,7 +337,6 @@ Tensor softdtw_cpu_backward_op(
 
 }  // anonymous namespace
 
-
 STABLE_TORCH_LIBRARY(torchsoftdtw, m) {
     m.def("forward(Tensor D, Tensor lengths_x, Tensor lengths_y, float gamma, int bandwidth) -> (Tensor, Tensor)");
     m.def("backward(Tensor D, Tensor R, Tensor lengths_x, Tensor lengths_y, float gamma, int bandwidth) -> Tensor");
@@ -347,5 +346,28 @@ STABLE_TORCH_LIBRARY_IMPL(torchsoftdtw, CPU, m) {
     m.impl("forward", TORCH_BOX(&softdtw_cpu_forward_op));
     m.impl("backward", TORCH_BOX(&softdtw_cpu_backward_op));
 }
+
+// Forward declarations of CUDA launchers (defined in cuda/softdtw.cu)
+#ifdef WITH_CUDA
+std::tuple<Tensor, Tensor> softdtw_cuda_forward_op(
+    Tensor D, Tensor lengths_x, Tensor lengths_y,
+    double gamma, int64_t bandwidth)
+{
+    softdtw_forward_checks(D, lengths_x, lengths_y, gamma);
+    return softdtw_cuda_forward(D, lengths_x, lengths_y, gamma, bandwidth);
+}
+
+Tensor softdtw_cuda_backward_op(
+    Tensor D, Tensor R, Tensor lengths_x, Tensor lengths_y,
+    double gamma, int64_t bandwidth)
+{
+    return softdtw_cuda_backward(D, R, lengths_x, lengths_y, gamma, bandwidth);
+}
+
+STABLE_TORCH_LIBRARY_IMPL(torchsoftdtw, CUDA, m) {
+    m.impl("forward", TORCH_BOX(&softdtw_cuda_forward_op));
+    m.impl("backward", TORCH_BOX(&softdtw_cuda_backward_op));
+}
+#endif
 
 }  // namespace torchsoftdtw
