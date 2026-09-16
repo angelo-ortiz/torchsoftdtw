@@ -5,29 +5,21 @@ Requires:
     pip install soft-dtw-cuda    (or install from https://github.com/Maghoumi/pytorch-softdtw-cuda)
 """
 
+from importlib import util
+
 import pytest
 import torch
 
-from torchsoftdtw import SoftDTW, soft_dtw
+from torchsoftdtw import soft_dtw
 from torchsoftdtw.distances import pairwise_l2_squared
 
 
-def _has_sdtw_cuda_torch():
-    try:
-        from softdtw_cuda import SoftDTW as RefSoftDTW
-
-        return True
-    except ImportError:
-        return False
+def _has_sdtw_cuda_torch() -> bool:
+    return util.find_spec("softdtw_cuda") is not None
 
 
-def _has_pytorch_softdtw_cuda():
-    try:
-        from torchsoftdtw.soft_dtw_cuda import SoftDTW as MaghoumiSoftDTW
-
-        return True
-    except ImportError:
-        return False
+def _has_pytorch_softdtw_cuda() -> bool:
+    return util.find_spec("torchsoftdtw.soft_dtw_cuda") is not None
 
 
 requires_sdtw_cuda_torch = pytest.mark.skipif(

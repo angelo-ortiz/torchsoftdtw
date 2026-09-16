@@ -77,9 +77,7 @@ def compute_softdtw_cuda(D, gamma, bandwidth, max_i, max_j, n_passes, R):
 
 # ----------------------------------------------------------------------------------------------------------------------
 @cuda.jit
-def compute_softdtw_backward_cuda(
-    D, R, inv_gamma, bandwidth, max_i, max_j, n_passes, E
-):
+def compute_softdtw_backward_cuda(D, R, inv_gamma, bandwidth, max_i, max_j, n_passes, E):
     k = cuda.blockIdx.x
     tid = cuda.threadIdx.x
 
@@ -106,12 +104,8 @@ def compute_softdtw_backward_cuda(
             if not (abs(i - j) > bandwidth > 0):
                 a = math.exp((R[k, i + 1, j] - R[k, i, j] - D[k, i + 1, j]) * inv_gamma)
                 b = math.exp((R[k, i, j + 1] - R[k, i, j] - D[k, i, j + 1]) * inv_gamma)
-                c = math.exp(
-                    (R[k, i + 1, j + 1] - R[k, i, j] - D[k, i + 1, j + 1]) * inv_gamma
-                )
-                E[k, i, j] = (
-                    E[k, i + 1, j] * a + E[k, i, j + 1] * b + E[k, i + 1, j + 1] * c
-                )
+                c = math.exp((R[k, i + 1, j + 1] - R[k, i, j] - D[k, i + 1, j + 1]) * inv_gamma)
+                E[k, i, j] = E[k, i + 1, j] * a + E[k, i, j + 1] * b + E[k, i + 1, j + 1] * c
 
         # Wait for other threads in this block
         cuda.syncthreads()
@@ -253,9 +247,7 @@ def compute_softdtw_backward(D_, R, gamma, bandwidth):
                 a = np.exp(a0)
                 b = np.exp(b0)
                 c = np.exp(c0)
-                E[k, i, j] = (
-                    E[k, i + 1, j] * a + E[k, i, j + 1] * b + E[k, i + 1, j + 1] * c
-                )
+                E[k, i, j] = E[k, i + 1, j] * a + E[k, i, j + 1] * b + E[k, i + 1, j + 1] * c
     return E[:, 1 : N + 1, 1 : M + 1]
 
 
@@ -297,9 +289,7 @@ class SoftDTW(torch.nn.Module):
     The soft DTW implementation that optionally supports CUDA
     """
 
-    def __init__(
-        self, use_cuda, gamma=1.0, normalize=False, bandwidth=None, dist_func=None
-    ):
+    def __init__(self, use_cuda, gamma=1.0, normalize=False, bandwidth=None, dist_func=None):
         """
         Initializes a new instance using the supplied parameters
         :param use_cuda: Flag indicating whether the CUDA implementation should be used
@@ -333,9 +323,7 @@ class SoftDTW(torch.nn.Module):
 
         use_cuda = self.use_cuda
 
-        if use_cuda and (
-            lx > 1024 or ly > 1024
-        ):  # We should be able to spawn enough threads in CUDA
+        if use_cuda and (lx > 1024 or ly > 1024):  # We should be able to spawn enough threads in CUDA
             print(
                 "SoftDTW: Cannot use CUDA because the sequence length > 1024 (the maximum block size supported by CUDA)"
             )

@@ -10,8 +10,6 @@ down to its true length and calling the implementation once per sample (batch si
 stacking the results.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import torch

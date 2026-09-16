@@ -31,9 +31,7 @@ def pairwise_l1(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return (X.unsqueeze(2) - Y.unsqueeze(1)).abs().sum(dim=-1)
 
 
-def pairwise_cosine(
-    X: torch.Tensor, Y: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
+def pairwise_cosine(X: torch.Tensor, Y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """Compute pairwise cosine distances (1 - cosine similarity).
 
     Args:

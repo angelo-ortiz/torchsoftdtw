@@ -118,30 +118,22 @@ class TestEdgeShapes:
     def test_1xM(self):
         torch.manual_seed(301)
         D = torch.rand(1, 1, 5, dtype=torch.float64, requires_grad=True)
-        torch.autograd.gradcheck(
-            lambda d: soft_dtw(d, gamma=1.0), (D,), eps=1e-6, atol=1e-4, rtol=1e-3
-        )
+        torch.autograd.gradcheck(lambda d: soft_dtw(d, gamma=1.0), (D,), eps=1e-6, atol=1e-4, rtol=1e-3)
 
     def test_Nx1(self):
         torch.manual_seed(302)
         D = torch.rand(1, 5, 1, dtype=torch.float64, requires_grad=True)
-        torch.autograd.gradcheck(
-            lambda d: soft_dtw(d, gamma=1.0), (D,), eps=1e-6, atol=1e-4, rtol=1e-3
-        )
+        torch.autograd.gradcheck(lambda d: soft_dtw(d, gamma=1.0), (D,), eps=1e-6, atol=1e-4, rtol=1e-3)
 
     def test_extreme_aspect_ratio(self):
         torch.manual_seed(303)
         D = torch.rand(1, 2, 20, dtype=torch.float64, requires_grad=True)
-        torch.autograd.gradcheck(
-            lambda d: soft_dtw(d, gamma=0.5), (D,), eps=1e-6, atol=1e-4, rtol=1e-3
-        )
+        torch.autograd.gradcheck(lambda d: soft_dtw(d, gamma=0.5), (D,), eps=1e-6, atol=1e-4, rtol=1e-3)
 
     def test_extreme_aspect_ratio_reversed(self):
         torch.manual_seed(304)
         D = torch.rand(1, 20, 2, dtype=torch.float64, requires_grad=True)
-        torch.autograd.gradcheck(
-            lambda d: soft_dtw(d, gamma=0.5), (D,), eps=1e-6, atol=1e-4, rtol=1e-3
-        )
+        torch.autograd.gradcheck(lambda d: soft_dtw(d, gamma=0.5), (D,), eps=1e-6, atol=1e-4, rtol=1e-3)
 
 
 class TestInputValidation:
@@ -246,9 +238,7 @@ class TestBandwidthPaddingCombined:
             nx, ny = actual_nx[b], actual_ny[b]
             D_single = D[b, :nx, :ny].unsqueeze(0)
             cost_single = soft_dtw(D_single, gamma=gamma, bandwidth=bw)
-            torch.testing.assert_close(
-                costs[b : b + 1], cost_single, atol=1e-10, rtol=1e-10
-            )
+            torch.testing.assert_close(costs[b : b + 1], cost_single, atol=1e-10, rtol=1e-10)
 
     def test_bandwidth_and_padding_gradient(self):
         torch.manual_seed(501)
@@ -366,16 +356,14 @@ class TestBandwidthZero:
         torch.manual_seed(801)
         D = torch.rand(1, 3, 5, dtype=torch.float64)
         costs_bw0 = soft_dtw(D, gamma=1.0, bandwidth=0)
-        assert torch.isinf(costs_bw0).all(), (
-            "bandwidth=0 on non-square matrix should be inf (no valid path)"
-        )
+        assert torch.isinf(costs_bw0).all(), "bandwidth=0 on non-square matrix should be inf (no valid path)"
 
 
 class TestTorchCompile:
     """torch.compile compatibility via FakeTensor registration."""
 
     def test_fake_tensor_shapes(self):
-        from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+        from torch._subclasses.fake_tensor import FakeTensorMode
 
         with FakeTensorMode() as mode:
             D = mode.from_tensor(torch.rand(2, 5, 7))

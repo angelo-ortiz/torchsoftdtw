@@ -11,8 +11,6 @@ time, each sliced to its true length, rather than batched over the padded tensor
 implementations.py).
 """
 
-from __future__ import annotations
-
 import contextlib
 import io
 import platform
@@ -22,10 +20,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import torch
+from numba.core.errors import NumbaPerformanceWarning
 from torch.utils.benchmark import Compare, Measurement, Timer
 
 from .generate import SPREADS, Batch, make_batch
 from .implementations import HAS_SDTW_CUDA_TORCH, maghoumi, ours, sdtw_cuda_torch
+
+warnings.filterwarnings("ignore", category=NumbaPerformanceWarning)
 
 GAMMA = 1.0
 SEED = 0
@@ -34,6 +35,7 @@ SEED = 0
 CONFIGS = [
     (64, 16, 8),
     (64, 64, 8),
+    (64, 256, 12),
     (32, 256, 16),
     (16, 512, 16),
 ]
@@ -46,9 +48,7 @@ def _build_impls(device: torch.device) -> list[tuple[str, Callable[..., torch.Te
         ("torchsoftdtw (ours)", lambda X, Y, lx, ly: ours(X, Y, lx, ly, GAMMA)),
         (
             "soft_dtw_cuda (Maghoumi)",
-            lambda X, Y, lx, ly: maghoumi(
-                X, Y, lx, ly, GAMMA, use_cuda=device.type == "cuda"
-            ),
+            lambda X, Y, lx, ly: maghoumi(X, Y, lx, ly, GAMMA, use_cuda=device.type == "cuda"),
         ),
     ]
     if HAS_SDTW_CUDA_TORCH:
@@ -61,9 +61,7 @@ def _build_impls(device: torch.device) -> list[tuple[str, Callable[..., torch.Te
     return impls
 
 
-def _check_correctness(
-    outputs: dict[str, torch.Tensor], reference_name: str = "torchsoftdtw (ours)"
-) -> None:
+def _check_correctness(outputs: dict[str, torch.Tensor], reference_name: str = "torchsoftdtw (ours)") -> None:
     reference = outputs[reference_name]
     for name, out in outputs.items():
         if name == reference_name:
@@ -71,9 +69,7 @@ def _check_correctness(
         try:
             torch.testing.assert_close(out, reference, atol=1e-3, rtol=1e-3)
         except AssertionError as exc:
-            warnings.warn(
-                f"{name} disagrees with {reference_name}: {exc}", stacklevel=2
-            )
+            warnings.warn(f"{name} disagrees with {reference_name}: {exc}", stacklevel=2)
 
 
 def measurements(
@@ -143,14 +139,15 @@ def _render(results: list[Measurement]) -> str:
 def _inject(output: Path, results: list[Measurement]) -> None:
     begin, end = BENCHMARK_MARKERS
     block = f"## Benchmark results on {_device_name()}\n\n```\n{_render(results)}\n```"
-    content = output.read_text(encoding="utf-8")
-    pattern = re.escape(begin) + r".*?" + re.escape(end)
-    new_content, count = re.subn(
-        pattern, lambda _: f"{begin}\n{block}\n{end}", content, flags=re.DOTALL
-    )
-    if count == 0:
-        msg = f"Markers not found in {output}. Add:\n{begin}\n{end}"
-        raise RuntimeError(msg)
+    if output.exists():
+        content = output.read_text(encoding="utf-8")
+        pattern = re.escape(begin) + r".*?" + re.escape(end)
+        new_content, count = re.subn(pattern, lambda _: f"{begin}\n{block}\n{end}", content, flags=re.DOTALL)
+        if count == 0:
+            msg = f"Markers not found in {output}. Add:\n{begin}\n{end}"
+            raise RuntimeError(msg)
+    else:
+        new_content = f"{begin}\n{block}\n{end}\n"
     output.write_text(new_content, encoding="utf-8")
 
 
@@ -160,10 +157,7 @@ def benchmark(
     output: Path | None = None,
 ) -> None:
     """Run the full sweep (CONFIGS x SPREADS x devices) and print a timing comparison table."""
-    devices = [
-        torch.device(t)
-        for t in ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
-    ]
+    devices = [torch.device(t) for t in ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])]
 
     results = [
         m

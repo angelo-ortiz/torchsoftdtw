@@ -1,7 +1,7 @@
 import os
 import sys
 
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, setup
 from torch.utils.cpp_extension import (
     CUDA_HOME,
     BuildExtension,
@@ -26,9 +26,7 @@ def get_extension() -> Extension:
     use_cuda = CUDA_HOME is not None and sys.platform != "win32"
     if use_cuda and "TORCH_CUDA_ARCH_LIST" not in os.environ:
         raise CUDAArchListError
-    sources = ["src/torchsoftdtw/csrc/softdtw.cpp"] + (
-        ["src/torchsoftdtw/csrc/cuda/softdtw.cu"] if use_cuda else []
-    )
+    sources = ["src/torchsoftdtw/csrc/softdtw.cpp"] + (["src/torchsoftdtw/csrc/cuda/softdtw.cu"] if use_cuda else [])
     TORCH_TARGET_VERSION = "0x020A000000000000"
     extra_compile_args = {
         "cxx": [
@@ -49,9 +47,7 @@ def get_extension() -> Extension:
         # Remove cudart so it does not appear in the .so's dependencies.
         # Cudart symbols are resolved at runtime from the cudart already loaded by PyTorch,
         # making the wheel compatible across CUDA major versions.
-        extension.libraries = [
-            lib for lib in extension.libraries if "cudart" not in lib
-        ]
+        extension.libraries = [lib for lib in extension.libraries if "cudart" not in lib]
     return extension
 
 

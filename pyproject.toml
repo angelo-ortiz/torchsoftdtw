@@ -23,12 +23,18 @@ benchmark = [
 [tool.uv.sources]
 softdtw-cuda-torch = { git = "https://github.com/BGU-CS-VIL/sdtw-cuda-torch.git" }
 
+[tool.ruff]
+extend-exclude = ["soft_dtw_cuda.py"]
+line-length = 119
+target-version = "py312"
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-wrap-aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore::numba.core.errors.NumbaPerformanceWarning"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

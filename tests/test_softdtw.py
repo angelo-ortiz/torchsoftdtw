@@ -143,9 +143,7 @@ class TestPadding:
             nx, ny = actual_lengths_x[b], actual_lengths_y[b]
             D_single = D_padded[b, :nx, :ny].unsqueeze(0)
             cost_single = soft_dtw(D_single, gamma=gamma)
-            torch.testing.assert_close(
-                costs_padded[b : b + 1], cost_single, atol=1e-10, rtol=1e-10
-            )
+            torch.testing.assert_close(costs_padded[b : b + 1], cost_single, atol=1e-10, rtol=1e-10)
 
     def test_padding_gradient(self):
         torch.manual_seed(2)
@@ -317,6 +315,4 @@ class TestDistances:
             for i in range(3):
                 for j in range(5):
                     expected = ((X[b, i] - Y[b, j]) ** 2).sum()
-                    torch.testing.assert_close(
-                        D[b, i, j], expected, atol=1e-10, rtol=1e-10
-                    )
+                    torch.testing.assert_close(D[b, i, j], expected, atol=1e-10, rtol=1e-10)

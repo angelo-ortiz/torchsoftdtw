@@ -12,8 +12,6 @@ Positions beyond a sample's true length are zeroed out, mimicking how a real pad
 batch (e.g. from a DataLoader with variable-length sequences) would look.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import torch
@@ -24,7 +22,7 @@ SPREADS = ("none", "small", "large")
 _SPREAD_MIN_FRAC = {"none": 1.0, "small": 0.9, "large": 0.25}
 
 
-@dataclass
+@dataclass(frozen=True)
 class Batch:
     X: torch.Tensor
     Y: torch.Tensor
@@ -32,17 +30,13 @@ class Batch:
     lengths_y: torch.Tensor
 
 
-def make_lengths(
-    batch_size: int, max_len: int, spread: str, generator: torch.Generator
-) -> torch.Tensor:
+def make_lengths(batch_size: int, max_len: int, spread: str, generator: torch.Generator) -> torch.Tensor:
     """Draw a (batch_size,) tensor of sequence lengths in [1, max_len] for the given spread."""
     min_frac = _SPREAD_MIN_FRAC[spread]
     if min_frac >= 1.0:
         return torch.full((batch_size,), max_len, dtype=torch.long)
     min_len = max(1, round(min_frac * max_len))
-    return torch.randint(
-        min_len, max_len + 1, (batch_size,), generator=generator, dtype=torch.long
-    )
+    return torch.randint(min_len, max_len + 1, (batch_size,), generator=generator, dtype=torch.long)
 
 
 def make_batch(

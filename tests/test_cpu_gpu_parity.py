@@ -11,20 +11,14 @@ import torch
 
 from torchsoftdtw.softdtw import soft_dtw
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA not available"
-)
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 
 
 def _compare(B, N, M, gamma, bandwidth, len_dtype, seed):
     torch.manual_seed(seed)
     D_cpu = torch.rand(B, N, M, dtype=torch.float64, requires_grad=True)
-    lx = torch.randint(
-        low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype
-    )
-    ly = torch.randint(
-        low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype
-    )
+    lx = torch.randint(low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype)
+    ly = torch.randint(low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype)
     lx = torch.clamp(lx, max=N)
     ly = torch.clamp(ly, max=M)
 
