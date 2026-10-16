@@ -15,6 +15,8 @@
 #include <torch/headeronly/core/TensorAccessor.h>
 #include <torch/headeronly/util/Exception.h>
 
+#include "band.h"
+
 /* Creates a dummy empty _C module that can be imported from Python.
    The import from Python will load the .so consisting of this file
    in this extension, so that the STABLE_TORCH_LIBRARY static initializers
@@ -139,7 +141,7 @@ std::tuple<Tensor, Tensor> softdtw_cpu_forward(
 
                 for (int64_t i = 0; i < nx; i++) {
                     for (int64_t j = 0; j < ny; j++) {
-                        if (bandwidth >= 0 && std::abs(i - j) > bandwidth) continue;
+                        if (!in_band(i, j, nx, ny, bandwidth)) continue;
 
                         int64_t ri = i + 1;
                         int64_t rj = j + 1;
@@ -237,7 +239,7 @@ Tensor softdtw_cpu_backward(
 
                 for (int64_t i = nx - 1; i >= 0; i--) {
                     for (int64_t j = ny - 1; j >= 0; j--) {
-                        if (bandwidth >= 0 && std::abs(i - j) > bandwidth) continue;
+                        if (!in_band(i, j, nx, ny, bandwidth)) continue;
 
                         int64_t ri = i + 1;
                         int64_t rj = j + 1;

@@ -62,7 +62,9 @@ def soft_dtw(
         lengths_x: (B,) actual lengths along dim 1, int32 or int64. Defaults to N for all.
         lengths_y: (B,) actual lengths along dim 2, int32 or int64. Defaults to M for all.
         gamma: Smoothing parameter (> 0).
-        bandwidth: Sakoe-Chiba bandwidth. -1 means no constraint.
+        bandwidth: Sakoe-Chiba bandwidth around the diagonal joining (0, 0) to (lengths_x - 1, lengths_y - 1),
+            in steps along the longer axis. Floored at half the diagonal's slope so that a warping path always
+            exists. -1 means no constraint.
 
     Returns:
         costs: (B,) soft-DTW values.
@@ -86,7 +88,9 @@ class SoftDTW(nn.Module):
         """
         Args:
             gamma: Smoothing parameter (> 0).
-            bandwidth: Sakoe-Chiba bandwidth. -1 means no constraint.
+            bandwidth: Sakoe-Chiba bandwidth around the diagonal joining the first and last frames, in steps
+                along the longer sequence. Floored at half the diagonal's slope so that a warping path always
+                exists. -1 means no constraint.
             normalize: Divide the cost by path length.
             distance: Pairwise distance used to build the cost matrix from X, Y.
                 One of "l2_squared", "l1", "cosine".
@@ -135,4 +139,4 @@ class SoftDTW(nn.Module):
         if lengths_y is None:
             lengths_y = torch.full((B,), Y.size(1), dtype=torch.long, device=Y.device)
 
-        return costs / (lengths_x + lengths_y).to(costs.dtype)
+        return costs / (lengths_x + lengths_y - 1).to(costs.dtype)

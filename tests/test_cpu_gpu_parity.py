@@ -17,10 +17,8 @@ requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA n
 def _compare(B, N, M, gamma, bandwidth, len_dtype, seed):
     torch.manual_seed(seed)
     D_cpu = torch.rand(B, N, M, dtype=torch.float64, requires_grad=True)
-    lx = torch.randint(low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype)
-    ly = torch.randint(low=max(1, min(N, M) - 3), high=min(N, M) + 1, size=(B,), dtype=len_dtype)
-    lx = torch.clamp(lx, max=N)
-    ly = torch.clamp(ly, max=M)
+    lx = torch.randint(low=max(1, N - 3), high=N + 1, size=(B,), dtype=len_dtype)
+    ly = torch.randint(low=max(1, M - 3), high=M + 1, size=(B,), dtype=len_dtype)
 
     D_gpu = D_cpu.detach().clone().cuda().requires_grad_(True)
     lx_gpu, ly_gpu = lx.cuda(), ly.cuda()
@@ -55,3 +53,12 @@ class TestCpuGpuParity:
 
     def test_tiled_path_with_band(self):
         _compare(2, 120, 130, 1.0, 50, torch.int64, seed=4)
+
+    # Strongly rectangular shapes where |N - M| > bandwidth: the band must follow the scaled diagonal.
+    @pytest.mark.parametrize("bandwidth", [0, 1, 3])
+    @pytest.mark.parametrize("N,M", [(6, 20), (20, 6)])
+    def test_rectangular_with_band(self, N, M, bandwidth):
+        _compare(3, N, M, 0.5, bandwidth, torch.int64, seed=5)
+
+    def test_tiled_path_rectangular_with_band(self):
+        _compare(2, 300, 1500, 1.0, 10, torch.int64, seed=6)

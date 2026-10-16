@@ -352,11 +352,18 @@ class TestBandwidthZero:
         diagonal_cost = D[0].diag().sum()
         torch.testing.assert_close(costs_bw0[0], diagonal_cost, atol=1e-10, rtol=1e-10)
 
-    def test_bandwidth_zero_rectangular_inf(self):
+    def test_bandwidth_zero_rectangular_finite(self):
+        """On non-square matrices the band follows the scaled diagonal, so bandwidth=0 still admits a path."""
         torch.manual_seed(801)
         D = torch.rand(1, 3, 5, dtype=torch.float64)
         costs_bw0 = soft_dtw(D, gamma=1.0, bandwidth=0)
-        assert torch.isinf(costs_bw0).all(), "bandwidth=0 on non-square matrix should be inf (no valid path)"
+        assert torch.isfinite(costs_bw0).all()
+        # slope 2 -> w_eff = 1: cells (0,0),(0,1),(1,1),(1,2),(1,3),(2,3),(2,4)
+        allowed = [(0, 0), (0, 1), (1, 1), (1, 2), (1, 3), (2, 3), (2, 4)]
+        D_masked = torch.full_like(D, 1e6)
+        for i, j in allowed:
+            D_masked[0, i, j] = D[0, i, j]
+        torch.testing.assert_close(costs_bw0, soft_dtw(D_masked, gamma=1.0), atol=1e-8, rtol=1e-8)
 
 
 class TestTorchCompile:

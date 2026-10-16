@@ -12,6 +12,8 @@
 #include <torch/headeronly/core/TensorAccessor.h>
 #include <torch/headeronly/util/Exception.h>
 
+#include "../band.h"
+
 // Not part of the public stable ABI surface, but the only way (pre PyTorch 2.13's
 // Stream::nativeHandle()) to get the raw cudaStream_t backing the current stream,
 // so that our raw kernel launches enqueue on the same stream PyTorch itself uses.
@@ -190,8 +192,7 @@ __global__ void softdtw_forward_kernel(
         const int j = p - tid;
 
         if (i < nx && j >= 0 && j < ny) {
-            bool in_band = (bandwidth < 0) || (abs(i - j) <= bandwidth);
-            if (in_band) {
+            if (in_band(i, j, nx, ny, bandwidth)) {
                 const int ri = i + 1;
                 const int rj = j + 1;
 
@@ -252,7 +253,7 @@ __global__ void softdtw_forward_tiled_kernel(
     const int j = p - i;
 
     if (i < 0 || i >= nx || j < 0 || j >= ny) return;
-    if (bandwidth >= 0 && abs(i - j) > bandwidth) return;
+    if (!in_band(i, j, nx, ny, bandwidth)) return;
 
     const scalar_t INF = INFINITY;
     scalar_t* R_b = R + b * (N + 2) * R_M;
@@ -346,8 +347,7 @@ __global__ void softdtw_backward_kernel(
         const int j = p - tid;
 
         if (i < nx && j >= 0 && j < ny) {
-            bool in_band = (bandwidth < 0) || (abs(i - j) <= bandwidth);
-            if (in_band) {
+            if (in_band(i, j, nx, ny, bandwidth)) {
                 const int ri = i + 1;
                 const int rj = j + 1;
 
@@ -421,7 +421,7 @@ __global__ void softdtw_backward_tiled_kernel(
     const int j = p - i;
 
     if (i < 0 || i >= nx || j < 0 || j >= ny) return;
-    if (bandwidth >= 0 && abs(i - j) > bandwidth) return;
+    if (!in_band(i, j, nx, ny, bandwidth)) return;
 
     const scalar_t NEG_INF = -INFINITY;
     const scalar_t INF = INFINITY;

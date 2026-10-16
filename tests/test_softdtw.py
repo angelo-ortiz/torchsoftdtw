@@ -1,4 +1,5 @@
 import math
+from fractions import Fraction
 
 # import pytest
 import torch
@@ -44,6 +45,16 @@ def _soft_dtw_brute_force(D, gamma):
     return (-gamma * (torch.log(torch.exp(neg - m_val).sum()) + m_val)).item()
 
 
+def _in_band(i, j, n, m, bandwidth):
+    """Sakoe-Chiba band around the diagonal from (0, 0) to (n-1, m-1), measured along the longer axis
+    and floored at half its slope (exact rational arithmetic)."""
+    if bandwidth < 0 or min(n, m) == 1:
+        return True
+    k, l, short, long = (i, j, n, m) if n <= m else (j, i, m, n)
+    slope = Fraction(long - 1, short - 1)
+    return abs(l - k * slope) <= max(Fraction(bandwidth), slope / 2)
+
+
 def _reference_softdtw(D, gamma, bandwidth=-1):
     """Triple-loop reference soft-DTW (no padding)."""
     B, N, M = D.shape
@@ -54,7 +65,7 @@ def _reference_softdtw(D, gamma, bandwidth=-1):
     for b in range(B):
         for i in range(N):
             for j in range(M):
-                if bandwidth >= 0 and abs(i - j) > bandwidth:
+                if not _in_band(i, j, N, M, bandwidth):
                     continue
                 ri, rj = i + 1, j + 1
                 preds = torch.tensor(
@@ -143,7 +154,7 @@ class TestPadding:
             nx, ny = actual_lengths_x[b], actual_lengths_y[b]
             D_single = D_padded[b, :nx, :ny].unsqueeze(0)
             cost_single = soft_dtw(D_single, gamma=gamma)
-            torch.testing.assert_close(costs_padded[b : b + 1], cost_single, atol=1e-10, rtol=1e-10)
+            torch.testing.assert_close(costs_padded[b: b + 1], cost_single, atol=1e-10, rtol=1e-10)
 
     def test_padding_gradient(self):
         torch.manual_seed(2)
@@ -184,6 +195,30 @@ class TestBandwidth:
             expected = _reference_softdtw(D, gamma, bandwidth=bw)
             torch.testing.assert_close(result, expected, atol=1e-8, rtol=1e-6)
 
+    def test_square_band_is_plain_diagonal(self):
+        n = 6
+        for bw in range(n):
+            for i in range(n):
+                for j in range(n):
+                    assert _in_band(i, j, n, n, bw) == (abs(i - j) <= bw)
+
+    def test_rectangular_bandwidth_matches_reference(self):
+        torch.manual_seed(7)
+        for N, M in [(4, 8), (8, 4), (7, 4), (5, 6), (3, 10)]:
+            D = torch.rand(2, N, M, dtype=torch.float64)
+            for bw in (0, 1, 2):
+                result = soft_dtw(D, gamma=0.5, bandwidth=bw)
+                expected = _reference_softdtw(D, 0.5, bandwidth=bw)
+                assert torch.isfinite(result).all(), f"{N}x{M}, bw={bw}"
+                torch.testing.assert_close(result, expected, atol=1e-8, rtol=1e-6)
+
+    def test_rectangular_bandwidth_constrains(self):
+        torch.manual_seed(8)
+        D = torch.rand(1, 6, 15, dtype=torch.float64)
+        cost_full = soft_dtw(D, gamma=0.5, bandwidth=-1)
+        cost_band = soft_dtw(D, gamma=0.5, bandwidth=1)
+        assert cost_band.item() >= cost_full.item() - 1e-10
+
 
 class TestGradients:
     def test_gradcheck(self):
@@ -208,6 +243,20 @@ class TestGradients:
 
         torch.autograd.gradcheck(
             lambda d: soft_dtw(d, lx, ly, gamma=0.5, bandwidth=2),
+            (D,),
+            eps=1e-6,
+            atol=1e-4,
+            rtol=1e-3,
+        )
+
+    def test_gradcheck_rectangular_with_bandwidth(self):
+        torch.manual_seed(9)
+        D = torch.rand(2, 4, 9, dtype=torch.float64, requires_grad=True)
+        lx = torch.tensor([4, 3], dtype=torch.long)
+        ly = torch.tensor([9, 7], dtype=torch.long)
+
+        torch.autograd.gradcheck(
+            lambda d: soft_dtw(d, lx, ly, gamma=0.5, bandwidth=1),
             (D,),
             eps=1e-6,
             atol=1e-4,
@@ -247,15 +296,15 @@ class TestModule:
         torch.manual_seed(9)
         X = torch.randn(2, 5, 4, dtype=torch.float64)
         Y = torch.randn(2, 5, 4, dtype=torch.float64)
-        lengths_y = torch.tensor([5, 3])
+        lengths_x, lengths_y = torch.tensor([4, 6]), torch.tensor([5, 3])
 
         sdtw = SoftDTW(gamma=1.0, normalize=False)
-        raw_costs = sdtw(X, Y, lengths_y=lengths_y)
+        raw_costs = sdtw(X, Y, lengths_x=lengths_x, lengths_y=lengths_y)
 
         sdtw_norm = SoftDTW(gamma=1.0, normalize=True)
-        norm_costs = sdtw_norm(X, Y, lengths_y=lengths_y)
+        norm_costs = sdtw_norm(X, Y, lengths_x=lengths_x, lengths_y=lengths_y)
 
-        assert torch.allclose(norm_costs, raw_costs / lengths_y.to(raw_costs.dtype))
+        assert torch.allclose(norm_costs, raw_costs / (lengths_x + lengths_y - 1).to(raw_costs.dtype))
 
     def test_unbatched_input(self):
         torch.manual_seed(10)
@@ -314,5 +363,5 @@ class TestDistances:
         for b in range(2):
             for i in range(3):
                 for j in range(5):
-                    expected = ((X[b, i] - Y[b, j]) ** 2).sum()
+                    expected = ((X[b, i] - Y[b, j])**2).sum()
                     torch.testing.assert_close(D[b, i, j], expected, atol=1e-10, rtol=1e-10)
