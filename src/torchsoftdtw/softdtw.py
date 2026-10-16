@@ -87,7 +87,7 @@ class SoftDTW(nn.Module):
         Args:
             gamma: Smoothing parameter (> 0).
             bandwidth: Sakoe-Chiba bandwidth. -1 means no constraint.
-            normalize: Divide the cost by lengths_y (or Y's sequence length).
+            normalize: Divide the cost by path length.
             distance: Pairwise distance used to build the cost matrix from X, Y.
                 One of "l2_squared", "l1", "cosine".
         """
@@ -130,7 +130,9 @@ class SoftDTW(nn.Module):
         if not self.normalize:
             return costs
 
+        if lengths_x is None:
+            lengths_x = torch.full((B,), X.size(1), dtype=torch.long, device=X.device)
         if lengths_y is None:
             lengths_y = torch.full((B,), Y.size(1), dtype=torch.long, device=Y.device)
 
-        return costs / lengths_y.to(costs.dtype)
+        return costs / (lengths_x + lengths_y).to(costs.dtype)
